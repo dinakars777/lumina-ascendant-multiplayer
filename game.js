@@ -3935,7 +3935,7 @@ function enterDeploymentHub() {
     if (ui.craftingScreen) ui.craftingScreen.classList.add('hidden');
     if (ui.multiplayerScreen) ui.multiplayerScreen.classList.add('hidden');
 
-    pushFeed('Teleported to Staging Nexus. Enter Solo Rift. With Others is coming soon.', 'info');
+    pushFeed('Staging Nexus online. Step into Solo Rift to begin. With Others is coming soon.', 'info');
     if (state.multiplayer.inRoom) {
         const hostText = isMultiplayerHost() ? 'You are host.' : 'Host launches multiplayer runs.';
         pushFeed(`Room ${state.multiplayer.roomCode} linked. ${hostText}`, 'info');
@@ -5215,19 +5215,6 @@ function bindInput() {
         }
 
         if (isInputBlockedByOverlay()) return;
-
-        if (state.started && state.phase === 'DEPLOY' && !state.paused) {
-            if (key === '1') {
-                event.preventDefault();
-                beginForestRun('solo');
-                return;
-            }
-            if (key === '2') {
-                event.preventDefault();
-                notifyMultiplayerDisabled();
-                return;
-            }
-        }
 
         state.keys[key] = true;
 
@@ -9211,7 +9198,7 @@ function interact() {
                 beginForestRun('solo');
             }
         } else {
-            pushFeed('Move closer to a deployment portal.', 'warn');
+            pushFeed('Move to the Solo Rift gate to deploy.', 'warn');
         }
         return;
     }
@@ -9276,11 +9263,11 @@ function updateInteractionPrompt() {
     if (state.phase === 'DEPLOY') {
         const portal = getNearbyDeployPortal();
         if (!portal) {
-            ui.interactionText.textContent = 'CHOOSE SOLO PORTAL OR PRESS 1';
+            ui.interactionText.textContent = 'MOVE TO SOLO RIFT';
         } else if (portal.id === 'allies') {
             ui.interactionText.textContent = 'WITH OTHERS: COMING SOON';
         } else {
-            ui.interactionText.textContent = 'E: ENTER SOLO (1)';
+            ui.interactionText.textContent = 'E: ENTER SOLO RIFT';
         }
         ui.interactionPrompt.classList.remove('hidden');
         return;
@@ -9651,7 +9638,7 @@ function updateHUD() {
             }
             ui.objectiveText.textContent = `${modePrefix}Ignite beacons (${state.beaconsLit}/${CONFIG.BEACON_COUNT}). Fire ${firePct}% | Threat ${threatPct}%${assistLabel}${weatherCtl}${nemesisText}${orbText}${driveText}${eventText}.`;
         } else if (state.phase === 'DEPLOY') {
-            ui.objectiveText.textContent = 'Deployment Nexus: choose Solo Rift. Multiplayer is coming soon.';
+            ui.objectiveText.textContent = 'Deployment Nexus: step into Solo Rift to start.';
         } else if (state.phase === 'GAME_OVER') {
             ui.objectiveText.textContent = 'Run ended. Upgrade and deploy again.';
         } else {
@@ -9671,7 +9658,7 @@ function updateHUD() {
         } else if (state.phase === 'SURVIVE' && !event.resolved) {
             ui.contractText.textContent = `Night event inbound: ${Math.max(0, Math.ceil(event.triggerTimer))}s`;
         } else if (state.phase === 'DEPLOY') {
-            ui.contractText.textContent = 'Solo deployment ready • Multiplayer coming soon';
+            ui.contractText.textContent = 'Solo Rift online • With Others coming soon';
         } else {
             const c = state.currentContract;
             if (!c) {
