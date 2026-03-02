@@ -1,0 +1,9 @@
+node_modules/
+.DS_Store
+
+# Local temp/test scripts and logs
+tmp_*.js
+*.log
+
+# Tunnel/session helpers
+tunnel-watchdog.sh

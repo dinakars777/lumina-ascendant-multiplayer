@@ -1,0 +1,12 @@
+services:
+  - type: web
+    name: lumina-ascendant-multiplayer
+    runtime: node
+    plan: free
+    autoDeploy: true
+    buildCommand: npm ci --omit=dev
+    startCommand: npm start
+    healthCheckPath: /healthz
+    envVars:
+      - key: NODE_VERSION
+        value: "20"

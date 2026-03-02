@@ -1,0 +1,309 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Lumina: Ascendant Edition</title>
+    <link rel="stylesheet" href="style.css">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;800&display=swap" rel="stylesheet">
+    <script src="three.min.js"></script>
+    <!-- FontAwesome for Icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+</head>
+
+<body>
+    <canvas id="gameCanvas"></canvas>
+
+    <!-- VFX Overlay Layer -->
+    <div id="vfx-layer">
+        <div id="vfx-vignette" class="vfx-overlay"></div>
+        <div id="vfx-flash" class="vfx-overlay"></div>
+        <div id="vfx-rain" class="vfx-overlay"></div>
+        <div id="vfx-heartbeat" class="vfx-overlay"></div>
+    </div>
+
+    <div id="ui-layer">
+        <!-- Top Bar: Settings & Currency -->
+        <div class="hud top-bar">
+            <div class="currency-display">
+                <i class="fa-solid fa-fire-flame-curved ember-icon"></i>
+                <span id="ember-count" class="value">0</span>
+                <span class="label">EMBERS</span>
+            </div>
+            <button id="shop-btn" class="icon-btn" title="Premium Shop"><i
+                    class="fa-solid fa-cart-shopping"></i></button>
+        </div>
+
+        <div class="hud top-left">
+            <div class="stat-box phase-box">
+                <span id="day-display" class="day-badge">DAY 1</span>
+                <span class="label">CURRENT PHASE</span>
+                <span id="phase-display" class="value">PREPARE</span>
+                <div class="timer-ring">
+                    <svg viewBox="0 0 36 36" class="circular-chart">
+                        <path class="circle-bg"
+                            d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831" />
+                        <path id="timer-circle" class="circle" stroke-dasharray="100, 100"
+                            d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831" />
+                    </svg>
+                    <span id="timer-display" class="time-text">60</span>
+                </div>
+            </div>
+        </div>
+
+        <div class="hud top-right-game">
+            <div class="resource-stack">
+                <div class="stat-box resource-box">
+                    <div class="resource-icon">
+                        <i class="fa-solid fa-tree"></i>
+                    </div>
+                    <div class="resource-info">
+                        <span class="label">WOOD</span>
+                        <span id="wood-count" class="value">0</span>
+                    </div>
+                </div>
+                <div class="stat-box resource-box crystal-box">
+                    <div class="resource-icon">
+                        <i class="fa-solid fa-gem"></i>
+                    </div>
+                    <div class="resource-info">
+                        <span class="label">SHARDS</span>
+                        <span id="shard-count" class="value">0</span>
+                    </div>
+                </div>
+                <div class="stat-box resource-box beacon-box">
+                    <div class="resource-icon">
+                        <i class="fa-solid fa-tower-observation"></i>
+                    </div>
+                    <div class="resource-info">
+                        <span class="label">BEACONS</span>
+                        <span id="beacon-count" class="value">0 / 3</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="hud bottom-center">
+            <div class="health-container">
+                <i class="fa-solid fa-heart pulse"></i>
+                <div class="health-bar-bg">
+                    <div id="health-bar" class="health-bar-fill"></div>
+                </div>
+            </div>
+        </div>
+
+        <div class="hud bottom-left">
+            <div class="ability-panel">
+                <div class="ability-row">
+                    <span class="ability-label">STAMINA</span>
+                    <div class="ability-meter">
+                        <div id="stamina-bar" class="ability-fill stamina-fill"></div>
+                    </div>
+                </div>
+                <div class="ability-row">
+                    <span class="ability-label">DASH</span>
+                    <div class="ability-meter">
+                        <div id="dash-bar" class="ability-fill dash-fill"></div>
+                    </div>
+                </div>
+                <div class="ability-row">
+                    <span class="ability-label">PULSE</span>
+                    <div class="ability-meter">
+                        <div id="pulse-bar" class="ability-fill pulse-fill"></div>
+                    </div>
+                </div>
+                <div class="ability-row compact">
+                    <span class="ability-label">FLARES</span>
+                    <span id="flare-count" class="ability-value">0</span>
+                </div>
+            </div>
+        </div>
+
+        <div class="hud combo-hud">
+            <div class="combo-header">
+                <span class="objective-label">MOMENTUM</span>
+                <span id="combo-value" class="combo-value">x1.00</span>
+            </div>
+            <div class="combo-bar-bg">
+                <div id="combo-bar" class="combo-bar-fill"></div>
+            </div>
+        </div>
+
+        <div class="hud objective-panel">
+            <span class="objective-label">MISSION</span>
+            <span id="objective-text">Gather wood and prepare for night.</span>
+            <span class="objective-label secondary">CONTRACT</span>
+            <span id="contract-text">No active contract</span>
+        </div>
+
+        <div class="hud radar-hud">
+            <canvas id="radar-canvas" width="150" height="150" aria-label="Radar"></canvas>
+        </div>
+
+        <div class="hud controls-hud">
+            <span>WASD Move</span>
+            <span>Shift Sprint</span>
+            <span>Space Dash</span>
+            <span>F Pulse</span>
+            <span>Q Flare</span>
+            <span>E Interact</span>
+        </div>
+
+        <div id="event-feed" class="event-feed"></div>
+
+        <div id="interaction-prompt" class="interaction-prompt hidden">
+            <div class="key-hint">E</div>
+            <span id="interaction-text">STOKE FIRE</span>
+        </div>
+
+        <!-- Screens -->
+        <div id="start-screen" class="screen active">
+            <div class="glass-panel hero-panel">
+                <div class="logo-area">
+                    <h1>LUMINA</h1>
+                    <span class="badge">SURVIVAL</span>
+                </div>
+
+                <!-- Difficulty Selector -->
+                <div class="difficulty-selector">
+                    <span class="label">SELECT DIFFICULTY</span>
+                    <div class="difficulty-buttons">
+                        <button class="difficulty-btn" data-difficulty="easy">
+                            <i class="fa-solid fa-seedling"></i>
+                            <span class="diff-name">Easy</span>
+                            <span class="diff-desc">Relaxed</span>
+                        </button>
+                        <button class="difficulty-btn active" data-difficulty="normal">
+                            <i class="fa-solid fa-fire"></i>
+                            <span class="diff-name">Normal</span>
+                            <span class="diff-desc">Balanced</span>
+                        </button>
+                        <button class="difficulty-btn" data-difficulty="hard">
+                            <i class="fa-solid fa-skull"></i>
+                            <span class="diff-name">Hard</span>
+                            <span class="diff-desc">Brutal</span>
+                        </button>
+                    </div>
+                </div>
+
+                <div class="loadout-preview">
+                    <div class="preview-card">
+                        <span class="label">BEST SURVIVAL</span>
+                        <h3 id="high-score-display">0 Nights</h3>
+                    </div>
+                    <div class="preview-card">
+                        <span class="label">SELECTED SKIN</span>
+                        <h3 id="current-skin-name">Standard</h3>
+                    </div>
+                    <div class="preview-card">
+                        <span class="label">TOTAL EMBERS</span>
+                        <h3 id="screen-ember-count">0</h3>
+                    </div>
+                </div>
+
+                <div class="actions">
+                    <button id="start-btn" class="primary-btn glow-btn">
+                        <i class="fa-solid fa-play"></i> ENTER FOREST
+                    </button>
+                    <button id="open-shop-btn" class="secondary-btn">
+                        <i class="fa-solid fa-store"></i> STORE
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Premium Shop Modal -->
+        <div id="shop-screen" class="screen hidden">
+            <div class="glass-panel shop-panel">
+                <div class="shop-header">
+                    <h2>PREMIUM STORE</h2>
+                    <button id="close-shop-btn" class="close-btn"><i class="fa-solid fa-xmark"></i></button>
+                </div>
+
+                <div class="shop-tabs">
+                    <button class="tab-btn active" data-tab="skins">SKINS</button>
+                    <button class="tab-btn" data-tab="upgrades">UPGRADES</button>
+                </div>
+
+                <div class="shop-content active" id="skins-tab">
+                    <div class="shop-item" data-id="neon_drifter" data-price="50">
+                        <div class="item-icon" style="background: cyan;"></div>
+                        <div class="item-info">
+                            <h4>Neon Drifter</h4>
+                            <p>Glow with cyberpunk energy.</p>
+                        </div>
+                        <button class="buy-btn">50 <i class="fa-solid fa-fire-flame-curved"></i></button>
+                    </div>
+                    <div class="shop-item" data-id="shadow_walker" data-price="100">
+                        <div class="item-icon" style="background: purple;"></div>
+                        <div class="item-info">
+                            <h4>Shadow Walker</h4>
+                            <p>Become one with the dark.</p>
+                        </div>
+                        <button class="buy-btn">100 <i class="fa-solid fa-fire-flame-curved"></i></button>
+                    </div>
+                    <div class="shop-item premium" data-id="golden_guardian" data-price="500">
+                        <div class="item-icon" style="background: gold; box-shadow: 0 0 10px gold;"></div>
+                        <div class="item-info">
+                            <h4>Golden Guardian</h4>
+                            <p>The ultimate prestige skin.</p>
+                        </div>
+                        <button class="buy-btn premium-btn">500 <i class="fa-solid fa-fire-flame-curved"></i></button>
+                    </div>
+                </div>
+
+                <div class="shop-content hidden" id="upgrades-tab">
+                    <div class="shop-item" data-id="blue_flame" data-price="200">
+                        <div class="item-icon"><i class="fa-solid fa-fire" style="color: #4da6ff;"></i></div>
+                        <div class="item-info">
+                            <h4>Sapphire Flame</h4>
+                            <p>Fire burns blue and lasts 20% longer.</p>
+                        </div>
+                        <button class="buy-btn">200 <i class="fa-solid fa-fire-flame-curved"></i></button>
+                    </div>
+                    <div class="shop-item" data-id="speed_boots" data-price="150">
+                        <div class="item-icon"><i class="fa-solid fa-person-running"></i></div>
+                        <div class="item-info">
+                            <h4>Swift Boots</h4>
+                            <p>Move 10% faster in the dark.</p>
+                        </div>
+                        <button class="buy-btn">150 <i class="fa-solid fa-fire-flame-curved"></i></button>
+                    </div>
+                </div>
+
+                <div class="shop-footer">
+                    <p>Play to earn Embers or unlock <span class="highlight">Premium Pass</span>.</p>
+                </div>
+            </div>
+        </div>
+
+        <div id="perk-screen" class="screen hidden">
+            <div class="glass-panel perk-panel">
+                <h2>CHOOSE AUGMENT</h2>
+                <p id="perk-subtitle">Select one upgrade for this run.</p>
+                <div id="perk-options" class="perk-options"></div>
+            </div>
+        </div>
+
+        <div id="game-over-screen" class="screen hidden">
+            <div class="glass-panel">
+                <h1 id="game-over-title">EXTINGUISHED</h1>
+                <p id="game-over-message">The darkness took you.</p>
+                <div class="rewards">
+                    <span>EARNED</span>
+                    <div class="reward-pill">
+                        <i class="fa-solid fa-fire-flame-curved"></i> +<span id="earned-embers">0</span>
+                    </div>
+                </div>
+                <button id="restart-btn" class="primary-btn">Rekindle</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="game.js" defer></script>
+</body>
+
+</html>
