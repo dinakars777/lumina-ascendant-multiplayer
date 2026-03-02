@@ -7,3 +7,4 @@ tmp_*.js
 
 # Tunnel/session helpers
 tunnel-watchdog.sh
+.vercel

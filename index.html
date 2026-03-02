@@ -6,7 +6,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="lumina-mp-url" content="https://lumina-ascendant-multiplayer.onrender.com">
     <title>Lumina: Ascendant Edition</title>
-    <link rel="stylesheet" href="style.css?v=ascendant_20260301a">
+    <link rel="stylesheet" href="style.css?v=ascendant_20260302q">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;800&display=swap" rel="stylesheet">
@@ -168,7 +168,7 @@
             <span>X Shoot</span>
             <span>Q Flare</span>
             <span>E Interact</span>
-            <span>M Lobby</span>
+            <span>M Multiplayer Soon</span>
         </div>
 
         <div id="touch-controls" class="touch-controls hidden">
@@ -261,8 +261,11 @@
                     <button id="start-btn" class="primary-btn glow-btn">
                         <i class="fa-solid fa-play"></i> ENTER FOREST
                     </button>
-                    <button id="open-multiplayer-btn" class="secondary-btn">
-                        <i class="fa-solid fa-user-group"></i> MULTIPLAYER
+                    <button id="rewarded-embers-btn" class="secondary-btn" title="Watch a rewarded ad for bonus embers">
+                        <i class="fa-solid fa-circle-play"></i> WATCH AD +30 EMBERS
+                    </button>
+                    <button id="open-multiplayer-btn" class="secondary-btn" disabled title="Multiplayer coming soon">
+                        <i class="fa-solid fa-user-group"></i> MULTIPLAYER (COMING SOON)
                     </button>
                     <button id="open-shop-btn" class="secondary-btn">
                         <i class="fa-solid fa-store"></i> STORE
@@ -501,6 +504,9 @@
                         <i class="fa-solid fa-fire-flame-curved"></i> +<span id="earned-embers">0</span>
                     </div>
                 </div>
+                <button id="gameover-rewarded-btn" class="secondary-btn">
+                    <i class="fa-solid fa-circle-play"></i> WATCH AD: +50% EMBERS
+                </button>
                 <button id="restart-btn" class="primary-btn">Rekindle</button>
             </div>
         </div>
@@ -512,7 +518,7 @@
                     <button id="close-multiplayer-btn" class="close-btn"><i class="fa-solid fa-xmark"></i></button>
                 </div>
 
-                <p id="multiplayer-status" class="multiplayer-status">Connect and create or join a room.</p>
+                <p id="multiplayer-status" class="multiplayer-status">Multiplayer is temporarily disabled. Coming soon.</p>
 
                 <div class="multiplayer-fields">
                     <label class="setting-row" for="mp-name-input">
@@ -561,13 +567,14 @@
                     <div id="mp-roster" class="multiplayer-roster"></div>
                 </div>
 
-                <p class="guide-footnote">Host can launch from this panel or from the <strong>With Others</strong> portal (key <strong>2</strong>) in Deployment Nexus.</p>
+                <p class="guide-footnote">Multiplayer is temporarily disabled while solo mode is being polished.</p>
             </div>
         </div>
     </div>
 
     <script src="https://cdn.socket.io/4.8.1/socket.io.min.js" crossorigin="anonymous"></script>
-    <script src="game.js?v=ascendant_20260301t" defer></script>
+    <script src="ads-adapter.js?v=ascendant_20260302q" defer></script>
+    <script src="game.js?v=ascendant_20260302q" defer></script>
 </body>
 
 </html>

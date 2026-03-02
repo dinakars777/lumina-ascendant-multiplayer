@@ -96,6 +96,14 @@ button,
     background: rgba(255, 255, 255, 0.1);
 }
 
+.secondary-btn:disabled,
+.secondary-btn:disabled:hover {
+    background: rgba(148, 154, 165, 0.18);
+    border-color: rgba(175, 182, 194, 0.26);
+    color: rgba(213, 219, 229, 0.7);
+    cursor: not-allowed;
+}
+
 .icon-btn {
     background: var(--glass-bg);
     border: 1px solid var(--glass-border);
@@ -1670,6 +1678,17 @@ h1 {
     align-items: center;
     gap: 8px;
     font-weight: 700;
+}
+
+#gameover-rewarded-btn {
+    width: 100%;
+    margin-bottom: 12px;
+    justify-content: center;
+}
+
+.perk-card.rewarded {
+    border-color: rgba(255, 209, 107, 0.5);
+    background: linear-gradient(140deg, rgba(255, 193, 77, 0.18), rgba(29, 34, 45, 0.9));
 }
 
 @keyframes pulse {

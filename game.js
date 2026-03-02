@@ -132,6 +132,20 @@ const CONFIG = {
     SAVE_KEY: 'lumina_save_ascendant',
     LEGACY_SAVE_KEY: 'lumina_save'
 };
+const MULTIPLAYER_ENABLED = false;
+const MULTIPLAYER_DISABLED_MESSAGE = 'Multiplayer is temporarily disabled. Coming soon.';
+let lastMultiplayerDisabledNoticeAt = 0;
+const MONETIZATION = Object.freeze({
+    REWARDED_DEFAULT_ENABLED: false,
+    REWARDED_DAILY_CAP: 6,
+    START_BONUS_EMBERS: 30,
+    START_BONUS_DAILY_CAP: 2,
+    GAME_OVER_BONUS_MULT: 0.5,
+    SHARD_REROLL_COST: 4,
+    REWARDED_COOLDOWN_MS: 900
+});
+const PLATFORM_SDK_INIT_TIMEOUT_MS = 1600;
+const CRAZYGAMES_SDK_URL = 'https://sdk.crazygames.com/crazygames-sdk-v3.js';
 
 const DIFFICULTY = {
     easy: {
@@ -318,7 +332,7 @@ const CRAFTING_RECIPES = [
 
 const DEPLOY_PORTALS = [
     { id: 'solo', label: 'Solo Rift', desc: 'Deploy alone into the forest.' },
-    { id: 'allies', label: 'Allies Rift', desc: 'Deploy with AI allies.' }
+    { id: 'allies', label: 'Allies Rift', desc: 'Multiplayer coming soon.' }
 ];
 
 const RELIC_CATALOG = {
@@ -709,6 +723,26 @@ const state = {
     deployment: {
         awaitingChoice: false
     },
+    ads: {
+        busy: false,
+        lastRewardedAt: 0,
+        dailyDate: getTodayDateId(),
+        dailyViews: 0,
+        startBonusClaims: 0,
+        perkRerollUsed: false,
+        gameOverBasePayout: 0,
+        gameOverBonus: 0,
+        gameOverRewardClaimed: false
+    },
+    platform: {
+        provider: 'web',
+        crazygames: {
+            ready: false,
+            initInFlight: false,
+            loadingActive: false,
+            gameplayActive: false
+        }
+    },
     multiplayer: {
         supported: false,
         socket: null,
@@ -860,7 +894,12 @@ const ui = {
     interactionPrompt: null,
     interactionText: null,
     startBtn: null,
+    rewardedEmbersBtn: null,
     restartBtn: null,
+    gameOverRewardedBtn: null,
+    gameOverEarned: null,
+    gameOverTitle: null,
+    gameOverMessage: null,
     openMultiplayerBtn: null,
     openShopBtn: null,
     closeShopBtn: null,
@@ -1302,6 +1341,392 @@ function setMultiplayerStatus(message, kind = '') {
     if (kind === 'warn' || kind === 'danger') {
         ui.multiplayerStatus.classList.add(kind);
     }
+}
+
+function getCrazyGamesSdk() {
+    if (typeof window === 'undefined') return null;
+    const sdkRoot = window.CrazyGames && window.CrazyGames.SDK;
+    return sdkRoot || null;
+}
+
+function shouldAttemptCrazyGamesSdk() {
+    if (typeof window === 'undefined') return false;
+    if (window.CrazyGames && window.CrazyGames.SDK) return true;
+    const host = String(window.location.hostname || '').toLowerCase();
+    if (host.endsWith('.crazygames.com') || host === 'crazygames.com') return true;
+    try {
+        const params = new URLSearchParams(window.location.search);
+        return params.get('cg_sdk') === '1';
+    } catch (_err) {
+        return false;
+    }
+}
+
+function loadCrazyGamesSdkScript() {
+    if (typeof document === 'undefined') return Promise.resolve(false);
+    if (getCrazyGamesSdk()) return Promise.resolve(true);
+
+    const existing = document.querySelector(`script[src="${CRAZYGAMES_SDK_URL}"]`);
+    if (existing) {
+        return new Promise((resolve) => {
+            const done = () => resolve(!!getCrazyGamesSdk());
+            existing.addEventListener('load', done, { once: true });
+            existing.addEventListener('error', () => resolve(false), { once: true });
+            setTimeout(done, PLATFORM_SDK_INIT_TIMEOUT_MS);
+        });
+    }
+
+    return new Promise((resolve) => {
+        const script = document.createElement('script');
+        script.src = CRAZYGAMES_SDK_URL;
+        script.async = true;
+        script.onload = () => resolve(!!getCrazyGamesSdk());
+        script.onerror = () => resolve(false);
+        document.head.appendChild(script);
+    });
+}
+
+async function initPlatformSdk() {
+    if (state.platform.crazygames.ready || state.platform.crazygames.initInFlight) return;
+    if (!shouldAttemptCrazyGamesSdk()) return;
+
+    state.platform.crazygames.initInFlight = true;
+    try {
+        if (!getCrazyGamesSdk()) {
+            const loaded = await loadCrazyGamesSdkScript();
+            if (!loaded) throw new Error('CrazyGames SDK script unavailable');
+        }
+        const sdk = getCrazyGamesSdk();
+        if (!sdk) throw new Error('CrazyGames SDK missing after load');
+
+        if (typeof sdk.init === 'function') {
+            const initPromise = Promise.resolve().then(() => sdk.init());
+            const timeoutPromise = new Promise((_, reject) => {
+                setTimeout(() => reject(new Error('CrazyGames SDK init timeout')), PLATFORM_SDK_INIT_TIMEOUT_MS);
+            });
+            await Promise.race([initPromise, timeoutPromise]);
+        }
+        state.platform.crazygames.ready = true;
+        state.platform.provider = 'crazygames';
+    } catch (err) {
+        console.warn('CrazyGames SDK init failed:', err);
+        state.platform.crazygames.ready = false;
+        state.platform.provider = 'web';
+    } finally {
+        state.platform.crazygames.initInFlight = false;
+    }
+}
+
+function notifyPlatformLoadingStart() {
+    const sdk = getCrazyGamesSdk();
+    if (!sdk || !state.platform.crazygames.ready || state.platform.crazygames.loadingActive) return;
+    const gameModule = sdk.game;
+    if (!gameModule || typeof gameModule.loadingStart !== 'function') return;
+
+    try {
+        gameModule.loadingStart();
+        state.platform.crazygames.loadingActive = true;
+    } catch (err) {
+        console.warn('CrazyGames loadingStart failed:', err);
+    }
+}
+
+function notifyPlatformLoadingStop() {
+    const sdk = getCrazyGamesSdk();
+    if (!sdk || !state.platform.crazygames.ready || !state.platform.crazygames.loadingActive) return;
+    const gameModule = sdk.game;
+    if (!gameModule || typeof gameModule.loadingStop !== 'function') return;
+
+    try {
+        gameModule.loadingStop();
+    } catch (err) {
+        console.warn('CrazyGames loadingStop failed:', err);
+    } finally {
+        state.platform.crazygames.loadingActive = false;
+    }
+}
+
+function notifyPlatformGameplayStart() {
+    const sdk = getCrazyGamesSdk();
+    if (!sdk || !state.platform.crazygames.ready || state.platform.crazygames.gameplayActive) return;
+    const gameModule = sdk.game;
+    if (!gameModule || typeof gameModule.gameplayStart !== 'function') return;
+
+    try {
+        gameModule.gameplayStart();
+        state.platform.crazygames.gameplayActive = true;
+    } catch (err) {
+        console.warn('CrazyGames gameplayStart failed:', err);
+    }
+}
+
+function notifyPlatformGameplayStop() {
+    const sdk = getCrazyGamesSdk();
+    if (!sdk || !state.platform.crazygames.ready || !state.platform.crazygames.gameplayActive) return;
+    const gameModule = sdk.game;
+    if (!gameModule || typeof gameModule.gameplayStop !== 'function') return;
+
+    try {
+        gameModule.gameplayStop();
+    } catch (err) {
+        console.warn('CrazyGames gameplayStop failed:', err);
+    } finally {
+        state.platform.crazygames.gameplayActive = false;
+    }
+}
+
+function isRewardedAdsEnabled() {
+    if (typeof window === 'undefined') return MONETIZATION.REWARDED_DEFAULT_ENABLED;
+    if (window.LUMINA_ADS_FORCE_OFF === true) return false;
+    if (window.LUMINA_ADS_FORCE_ON === true) return true;
+    try {
+        const params = new URLSearchParams(window.location.search);
+        const adsFlag = params.get('ads');
+        if (adsFlag === '0') return false;
+        if (adsFlag === '1') return true;
+    } catch (_err) {
+        // Ignore URL parse errors and fall back to environment defaults.
+    }
+    return shouldAttemptCrazyGamesSdk() || MONETIZATION.REWARDED_DEFAULT_ENABLED;
+}
+
+function isRewardedAdsTestMode() {
+    if (typeof window === 'undefined') return false;
+    if (window.LUMINA_ADS_TEST === true) return true;
+    try {
+        const params = new URLSearchParams(window.location.search);
+        return params.get('ads_test') === '1';
+    } catch (_err) {
+        return false;
+    }
+}
+
+function getRewardedBridge() {
+    if (typeof window === 'undefined') return null;
+    const bridge = window.LUMINA_ADS;
+    if (!bridge || typeof bridge.showRewarded !== 'function') return null;
+    return bridge;
+}
+
+function isRewardedProviderAvailable() {
+    if (isRewardedAdsTestMode()) return true;
+    const bridge = getRewardedBridge();
+    if (!bridge) return false;
+    if (typeof bridge.isAvailable === 'function') {
+        try {
+            return !!bridge.isAvailable();
+        } catch (_err) {
+            return false;
+        }
+    }
+    return true;
+}
+
+function ensureRewardedDailyState() {
+    const today = getTodayDateId();
+    if (state.ads.dailyDate === today) return;
+    state.ads.dailyDate = today;
+    state.ads.dailyViews = 0;
+    state.ads.startBonusClaims = 0;
+    state.ads.perkRerollUsed = false;
+}
+
+function canRequestRewardedAd(placement) {
+    if (!isRewardedAdsEnabled()) return false;
+    if (!isRewardedProviderAvailable()) return false;
+    ensureRewardedDailyState();
+    if (state.ads.busy) return false;
+    if (Date.now() - state.ads.lastRewardedAt < MONETIZATION.REWARDED_COOLDOWN_MS) return false;
+    if (state.ads.dailyViews >= MONETIZATION.REWARDED_DAILY_CAP) return false;
+    if (placement === 'start_bonus' && state.ads.startBonusClaims >= MONETIZATION.START_BONUS_DAILY_CAP) return false;
+    if (placement === 'perk_reroll' && state.ads.perkRerollUsed) return false;
+    if (placement === 'game_over_bonus' && state.ads.gameOverRewardClaimed) return false;
+    return true;
+}
+
+async function requestRewardedAd(placement, opts = {}) {
+    if (!canRequestRewardedAd(placement)) {
+        if (!isRewardedProviderAvailable()) {
+            pushFeed('Rewarded provider not configured yet.', 'warn');
+        }
+        if (opts.warnOnBlock) {
+            pushFeed(opts.warnOnBlock, 'warn');
+        }
+        updateRewardedOfferUI();
+        return false;
+    }
+
+    state.ads.busy = true;
+    updateRewardedOfferUI();
+    trackTelemetry('rewarded_start', { placement });
+    if (opts.startFeed) pushFeed(opts.startFeed, 'info');
+
+    let granted = false;
+    try {
+        const bridge = getRewardedBridge();
+
+        if (bridge) {
+            const result = await Promise.resolve(bridge.showRewarded({ placement }));
+            granted = !!result;
+        } else if (isRewardedAdsTestMode()) {
+            await new Promise((resolve) => setTimeout(resolve, 1800));
+            granted = true;
+        } else {
+            pushFeed('Rewarded ads unavailable on this build.', 'warn');
+        }
+    } catch (err) {
+        console.warn(`Rewarded ad failed (${placement}):`, err);
+        pushFeed('Rewarded ad failed to load. Try again.', 'warn');
+    } finally {
+        state.ads.busy = false;
+        state.ads.lastRewardedAt = Date.now();
+    }
+
+    if (!granted) {
+        trackTelemetry('rewarded_end', { placement, granted: 0 });
+        updateRewardedOfferUI();
+        return false;
+    }
+
+    state.ads.dailyViews += 1;
+    trackTelemetry('rewarded_end', {
+        placement,
+        granted: 1,
+        dailyViews: state.ads.dailyViews
+    });
+    saveProgress();
+    updateRewardedOfferUI();
+    return true;
+}
+
+function updateRewardedOfferUI() {
+    ensureRewardedDailyState();
+    const rewardedEnabled = isRewardedAdsEnabled();
+    const providerReady = isRewardedProviderAvailable();
+
+    if (ui.rewardedEmbersBtn) {
+        ui.rewardedEmbersBtn.style.display = rewardedEnabled ? '' : 'none';
+        if (!rewardedEnabled) {
+            ui.rewardedEmbersBtn.disabled = true;
+        }
+    }
+    if (ui.gameOverRewardedBtn) {
+        ui.gameOverRewardedBtn.style.display = rewardedEnabled ? '' : 'none';
+        if (!rewardedEnabled) {
+            ui.gameOverRewardedBtn.disabled = true;
+        }
+    }
+
+    if (!rewardedEnabled) return;
+
+    if (ui.rewardedEmbersBtn) {
+        const viewsLeft = Math.max(0, MONETIZATION.REWARDED_DAILY_CAP - state.ads.dailyViews);
+        const claimsLeft = Math.max(0, MONETIZATION.START_BONUS_DAILY_CAP - state.ads.startBonusClaims);
+        const capped = !providerReady || viewsLeft <= 0 || claimsLeft <= 0;
+        ui.rewardedEmbersBtn.disabled = state.ads.busy || capped;
+        if (state.ads.busy) {
+            ui.rewardedEmbersBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> AD IN PROGRESS...';
+        } else if (!providerReady) {
+            ui.rewardedEmbersBtn.innerHTML = '<i class="fa-solid fa-ban"></i> REWARDED ADS OFFLINE';
+        } else if (capped) {
+            ui.rewardedEmbersBtn.innerHTML = '<i class="fa-solid fa-circle-check"></i> DAILY BONUS CLAIMED';
+        } else {
+            ui.rewardedEmbersBtn.innerHTML = `<i class="fa-solid fa-circle-play"></i> WATCH AD +${MONETIZATION.START_BONUS_EMBERS} EMBERS (${claimsLeft} LEFT)`;
+        }
+    }
+
+    if (ui.gameOverRewardedBtn) {
+        const capped = state.ads.dailyViews >= MONETIZATION.REWARDED_DAILY_CAP;
+        const eligible = state.ads.gameOverBasePayout > 0 && !state.ads.gameOverRewardClaimed;
+        ui.gameOverRewardedBtn.disabled = state.ads.busy || capped || !eligible || !providerReady;
+        if (!eligible && state.ads.gameOverRewardClaimed) {
+            ui.gameOverRewardedBtn.innerHTML = `<i class="fa-solid fa-check"></i> BONUS CLAIMED +${state.ads.gameOverBonus}`;
+        } else if (!providerReady) {
+            ui.gameOverRewardedBtn.innerHTML = '<i class="fa-solid fa-ban"></i> REWARDED ADS OFFLINE';
+        } else if (!eligible) {
+            ui.gameOverRewardedBtn.innerHTML = '<i class="fa-solid fa-circle-play"></i> WATCH AD: +50% EMBERS';
+        } else if (state.ads.busy) {
+            ui.gameOverRewardedBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> AD IN PROGRESS...';
+        } else if (capped) {
+            ui.gameOverRewardedBtn.innerHTML = '<i class="fa-solid fa-ban"></i> DAILY AD LIMIT REACHED';
+        } else {
+            ui.gameOverRewardedBtn.innerHTML = '<i class="fa-solid fa-circle-play"></i> WATCH AD: +50% EMBERS';
+        }
+    }
+}
+
+async function claimStartBonusReward() {
+    const granted = await requestRewardedAd('start_bonus', {
+        startFeed: 'Playing sponsored reward clip...',
+        warnOnBlock: 'Rewarded bonus unavailable right now.'
+    });
+    if (!granted) return;
+
+    const amount = MONETIZATION.START_BONUS_EMBERS;
+    state.ads.startBonusClaims += 1;
+    state.embers += amount;
+    saveProgress();
+    updateShopButtons();
+    updateHUD();
+    updateRewardedOfferUI();
+    pushFeed(`Sponsored reward: +${amount} embers.`, 'info');
+}
+
+async function claimGameOverRewardBonus() {
+    if (state.phase !== 'GAME_OVER') return;
+    if (state.ads.gameOverRewardClaimed) return;
+    if (state.ads.gameOverBasePayout <= 0) return;
+
+    const granted = await requestRewardedAd('game_over_bonus', {
+        startFeed: 'Playing sponsored reward clip...',
+        warnOnBlock: 'Rewarded bonus unavailable right now.'
+    });
+    if (!granted) return;
+
+    const bonus = Math.max(1, Math.floor(state.ads.gameOverBasePayout * MONETIZATION.GAME_OVER_BONUS_MULT));
+    state.ads.gameOverRewardClaimed = true;
+    state.ads.gameOverBonus = bonus;
+    state.embers += bonus;
+
+    if (ui.gameOverEarned) {
+        ui.gameOverEarned.textContent = String(state.ads.gameOverBasePayout + bonus);
+    }
+
+    saveProgress();
+    updateShopButtons();
+    updateHUD();
+    updateRewardedOfferUI();
+    pushFeed(`Rewarded boost secured: +${bonus} embers.`, 'info');
+}
+
+async function claimPerkRerollReward() {
+    if (!state.paused || state.pauseReason !== 'perk') return;
+    if (!ui.perkTitle || ui.perkTitle.textContent !== 'CHOOSE AUGMENT') return;
+    if (state.ads.perkRerollUsed) return;
+
+    const granted = await requestRewardedAd('perk_reroll', {
+        startFeed: 'Loading rewarded reroll...',
+        warnOnBlock: 'Reroll not available right now.'
+    });
+    if (!granted) return;
+
+    state.ads.perkRerollUsed = true;
+    pushFeed('Rewarded reroll unlocked. New augment options loaded.', 'info');
+    showPerkDraft({ fromRewardedReroll: true });
+}
+
+function isMultiplayerEnabled() {
+    return MULTIPLAYER_ENABLED;
+}
+
+function notifyMultiplayerDisabled() {
+    const now = (typeof performance !== 'undefined' && typeof performance.now === 'function')
+        ? performance.now()
+        : Date.now();
+    if (now - lastMultiplayerDisabledNoticeAt < 850) return;
+    lastMultiplayerDisabledNoticeAt = now;
+    setMultiplayerStatus(MULTIPLAYER_DISABLED_MESSAGE, 'warn');
+    pushFeed(MULTIPLAYER_DISABLED_MESSAGE, 'warn');
 }
 
 function isMultiplayerHost() {
@@ -2007,6 +2432,7 @@ function rebuildAuthoritativeMirrorArrays() {
 }
 
 function endAuthoritativeSession(reason = 'Session ended.') {
+    notifyPlatformGameplayStop();
     state.multiplayer.authoritative.active = false;
     state.multiplayer.authoritative.seed = '';
     state.multiplayer.pingMs = 0;
@@ -2965,11 +3391,14 @@ function resolveDailyChallengeResult() {
     };
 }
 
-function initEngine() {
+async function initEngine() {
     if (typeof THREE === 'undefined') {
         alert('Three.js failed to load.');
         return;
     }
+
+    await initPlatformSdk();
+    notifyPlatformLoadingStart();
 
     cacheUI();
     bindUIActions();
@@ -2987,13 +3416,20 @@ function initEngine() {
     renderRelicLoadoutUI();
     updateShopButtons();
     updateHUD();
+    updateRewardedOfferUI();
     maybeShowFirstTimeGuide();
+    notifyPlatformLoadingStop();
 
     state.lastTime = performance.now();
     animate(state.lastTime);
 }
 
-window.addEventListener('DOMContentLoaded', initEngine);
+window.addEventListener('DOMContentLoaded', () => {
+    initEngine().catch((err) => {
+        notifyPlatformLoadingStop();
+        console.error('Engine init failed:', err);
+    });
+});
 
 function cacheUI() {
     ui.startScreen = document.getElementById('start-screen');
@@ -3028,7 +3464,12 @@ function cacheUI() {
     ui.interactionText = document.getElementById('interaction-text');
 
     ui.startBtn = document.getElementById('start-btn');
+    ui.rewardedEmbersBtn = document.getElementById('rewarded-embers-btn');
     ui.restartBtn = document.getElementById('restart-btn');
+    ui.gameOverRewardedBtn = document.getElementById('gameover-rewarded-btn');
+    ui.gameOverEarned = document.getElementById('earned-embers');
+    ui.gameOverTitle = document.getElementById('game-over-title');
+    ui.gameOverMessage = document.getElementById('game-over-message');
     ui.openMultiplayerBtn = document.getElementById('open-multiplayer-btn');
     ui.openShopBtn = document.getElementById('open-shop-btn');
     ui.closeShopBtn = document.getElementById('close-shop-btn');
@@ -3186,6 +3627,7 @@ function openSettingsScreen() {
         state.paused = true;
         state.pauseReason = 'settings';
         state.settingsResumeOnClose = true;
+        notifyPlatformGameplayStop();
     }
     state.keys = {};
     updateHUD();
@@ -3201,6 +3643,9 @@ function closeSettingsScreen(save = true) {
     if (state.settingsResumeOnClose && state.started && state.phase !== 'GAME_OVER') {
         state.paused = false;
         state.pauseReason = 'none';
+        if (state.phase !== 'DEPLOY') {
+            notifyPlatformGameplayStart();
+        }
     }
     state.settingsResumeOnClose = false;
     state.keys = {};
@@ -3238,7 +3683,7 @@ function getNearbyDeployPortal() {
 
         // If the player is exactly between portals, bias by side of the hub.
         if (Math.abs(d - nearestDist) <= 0.01) {
-            const preferId = player.x >= centerX ? 'allies' : 'solo';
+            const preferId = isMultiplayerEnabled() && player.x >= centerX ? 'allies' : 'solo';
             if (portal.id === preferId) {
                 nearest = portal;
                 nearestDist = d;
@@ -3361,6 +3806,7 @@ function openCraftingScreen() {
         state.paused = true;
         state.pauseReason = 'crafting';
         state.craftingResumeOnClose = true;
+        notifyPlatformGameplayStop();
     }
 
     if (ui.craftingSubtitle) {
@@ -3378,6 +3824,9 @@ function closeCraftingScreen() {
     if (state.craftingResumeOnClose && state.started && state.phase !== 'GAME_OVER') {
         state.paused = false;
         state.pauseReason = 'none';
+        if (state.phase !== 'DEPLOY') {
+            notifyPlatformGameplayStart();
+        }
     }
     state.craftingResumeOnClose = false;
     state.keys = {};
@@ -3486,7 +3935,7 @@ function enterDeploymentHub() {
     if (ui.craftingScreen) ui.craftingScreen.classList.add('hidden');
     if (ui.multiplayerScreen) ui.multiplayerScreen.classList.add('hidden');
 
-    pushFeed('Teleported to Staging Nexus. Choose Solo/With Others portal, or press 1 (Solo) / 2 (With Others).', 'info');
+    pushFeed('Teleported to Staging Nexus. Enter Solo Rift. With Others is coming soon.', 'info');
     if (state.multiplayer.inRoom) {
         const hostText = isMultiplayerHost() ? 'You are host.' : 'Host launches multiplayer runs.';
         pushFeed(`Room ${state.multiplayer.roomCode} linked. ${hostText}`, 'info');
@@ -3669,6 +4118,23 @@ function initTouchControls() {
 }
 
 function initMultiplayer() {
+    if (!isMultiplayerEnabled()) {
+        state.multiplayer.supported = false;
+        if (ui.openMultiplayerBtn) {
+            ui.openMultiplayerBtn.disabled = true;
+            ui.openMultiplayerBtn.title = 'Multiplayer coming soon';
+        }
+        setMultiplayerStatus(MULTIPLAYER_DISABLED_MESSAGE, 'warn');
+        renderMultiplayerRoster();
+        updateMultiplayerRoomUI();
+        return;
+    }
+
+    if (ui.openMultiplayerBtn) {
+        ui.openMultiplayerBtn.disabled = false;
+        ui.openMultiplayerBtn.removeAttribute('title');
+    }
+
     state.multiplayer.supported = typeof window !== 'undefined' && typeof window.io === 'function';
     state.multiplayer.name = getStoredMultiplayerName();
     state.multiplayer.clientId = getStoredMultiplayerClientId();
@@ -3693,6 +4159,17 @@ function initMultiplayer() {
 }
 
 function updateMultiplayerRoomUI() {
+    if (!isMultiplayerEnabled()) {
+        if (ui.mpRoomDisplay) ui.mpRoomDisplay.textContent = '-';
+        if (ui.mpCreateBtn) ui.mpCreateBtn.disabled = true;
+        if (ui.mpJoinBtn) ui.mpJoinBtn.disabled = true;
+        if (ui.mpLeaveBtn) ui.mpLeaveBtn.disabled = true;
+        if (ui.mpCopyCodeBtn) ui.mpCopyCodeBtn.disabled = true;
+        if (ui.mpStartBtn) ui.mpStartBtn.disabled = true;
+        if (ui.mpStartHint) ui.mpStartHint.textContent = 'Multiplayer is disabled for now. Coming soon.';
+        return;
+    }
+
     const players = Array.isArray(state.multiplayer.players) ? state.multiplayer.players : [];
     const connected = !!state.multiplayer.connected;
     const inRoom = !!state.multiplayer.inRoom;
@@ -3761,6 +4238,10 @@ function renderMultiplayerRoster() {
 
 function openMultiplayerScreen() {
     if (!ui.multiplayerScreen) return;
+    if (!isMultiplayerEnabled()) {
+        notifyMultiplayerDisabled();
+        return;
+    }
     if (state.multiplayer.supported) ensureMultiplayerSocket();
     if (ui.startScreen && (!state.started || state.phase === 'GAME_OVER')) {
         ui.startScreen.classList.add('hidden');
@@ -3795,6 +4276,10 @@ function getMultiplayerProfileFromUI() {
 }
 
 function ensureMultiplayerSocket() {
+    if (!isMultiplayerEnabled()) {
+        notifyMultiplayerDisabled();
+        return false;
+    }
     if (!state.multiplayer.supported) {
         setMultiplayerStatus('Socket client missing. Use npm start server for multiplayer.', 'warn');
         return false;
@@ -4501,6 +4986,10 @@ function emitMultiplayerState(dt) {
 }
 
 function requestNetworkRunStart() {
+    if (!isMultiplayerEnabled()) {
+        notifyMultiplayerDisabled();
+        return false;
+    }
     if (!state.multiplayer.socket || !state.multiplayer.connected || !state.multiplayer.inRoom) {
         openMultiplayerScreen();
         setMultiplayerStatus('Join a multiplayer room before entering With Others.', 'warn');
@@ -4527,6 +5016,7 @@ function requestNetworkRunStart() {
 }
 
 function handleNetworkGameStart(payload = {}) {
+    if (!isMultiplayerEnabled()) return;
     if (!payload || payload.partyMode !== 'allies') return;
     if (!state.multiplayer.inRoom || payload.roomCode !== state.multiplayer.roomCode) return;
 
@@ -4560,8 +5050,14 @@ function bindUIActions() {
     if (ui.startBtn) {
         ui.startBtn.addEventListener('click', startGame);
     }
+    if (ui.rewardedEmbersBtn) {
+        ui.rewardedEmbersBtn.addEventListener('click', claimStartBonusReward);
+    }
     if (ui.restartBtn) {
         ui.restartBtn.addEventListener('click', startGame);
+    }
+    if (ui.gameOverRewardedBtn) {
+        ui.gameOverRewardedBtn.addEventListener('click', claimGameOverRewardBonus);
     }
     if (ui.openMultiplayerBtn) {
         ui.openMultiplayerBtn.addEventListener('click', openMultiplayerScreen);
@@ -4728,12 +5224,7 @@ function bindInput() {
             }
             if (key === '2') {
                 event.preventDefault();
-                if (!state.multiplayer.inRoom || !state.multiplayer.connected) {
-                    openMultiplayerScreen();
-                    pushFeed('Join or create a multiplayer room first.', 'warn');
-                } else {
-                    requestNetworkRunStart();
-                }
+                notifyMultiplayerDisabled();
                 return;
             }
         }
@@ -4772,7 +5263,7 @@ function bindInput() {
         }
         if (key === 'm' && (!state.started || state.phase === 'DEPLOY' || state.phase === 'GAME_OVER')) {
             event.preventDefault();
-            openMultiplayerScreen();
+            notifyMultiplayerDisabled();
         }
     });
 
@@ -5239,6 +5730,7 @@ function buildDeployHub() {
     hub.add(centerBeacon);
 
     const makePortal = (portal, px) => {
+        const alliesLocked = portal.id === 'allies' && !isMultiplayerEnabled();
         const group = new THREE.Group();
         const pedestal = new THREE.Mesh(
             new THREE.CylinderGeometry(1.25, 1.5, 0.9, 24),
@@ -5252,8 +5744,8 @@ function buildDeployHub() {
         const arch = new THREE.Mesh(
             new THREE.TorusGeometry(1.2, 0.16, 12, 40),
             new THREE.MeshStandardMaterial({
-                color: portal.id === 'solo' ? 0x8be3ff : 0xffc38a,
-                emissive: portal.id === 'solo' ? 0x2b6e80 : 0x7d4418,
+                color: portal.id === 'solo' ? 0x8be3ff : (alliesLocked ? 0x8d959f : 0xffc38a),
+                emissive: portal.id === 'solo' ? 0x2b6e80 : (alliesLocked ? 0x3b434c : 0x7d4418),
                 emissiveIntensity: 1.35,
                 roughness: 0.2,
                 metalness: 0.58
@@ -5263,7 +5755,7 @@ function buildDeployHub() {
         arch.position.y = 1.55;
         group.add(arch);
 
-        const glow = new THREE.PointLight(portal.id === 'solo' ? 0x71d4ff : 0xffb475, 1.2, 18, 2);
+        const glow = new THREE.PointLight(portal.id === 'solo' ? 0x71d4ff : (alliesLocked ? 0x8893a0 : 0xffb475), alliesLocked ? 0.55 : 1.2, 18, 2);
         glow.position.y = 2.6;
         group.add(glow);
 
@@ -5792,6 +6284,7 @@ function beginAuthoritativeCoopRun(payload = {}) {
     });
 
     pushFeed('Authoritative co-op session active. Server now owns enemies, resources, and combat.', 'info');
+    notifyPlatformGameplayStart();
     updateHUD();
 }
 
@@ -5918,10 +6411,16 @@ function beginForestRun(partyMode = state.partyMode, options = {}) {
     if (state.runAssist.startWoodBonus > 0 || state.runAssist.startShardBonus > 0) {
         pushFeed(`Recovery boost active: +${state.runAssist.startWoodBonus} wood, +${state.runAssist.startShardBonus} shards.`, 'info');
     }
+    notifyPlatformGameplayStart();
     updateHUD();
 }
 
 function startGame() {
+    notifyPlatformGameplayStop();
+    state.ads.gameOverBasePayout = 0;
+    state.ads.gameOverBonus = 0;
+    state.ads.gameOverRewardClaimed = false;
+    updateRewardedOfferUI();
     enterDeploymentHub();
 }
 
@@ -6157,15 +6656,24 @@ function hidePerkDraft() {
     if (ui.perkScreen) ui.perkScreen.classList.add('hidden');
     state.paused = false;
     state.pauseReason = 'none';
+    if (state.started && state.phase !== 'GAME_OVER' && state.phase !== 'DEPLOY') {
+        notifyPlatformGameplayStart();
+    }
+    updateRewardedOfferUI();
 }
 
-function showPerkDraft() {
+function showPerkDraft(opts = {}) {
     if (!ui.perkScreen || !ui.perkOptions) return;
+    if (!opts.fromRewardedReroll) {
+        state.ads.perkRerollUsed = false;
+    }
+
     const options = pickPerkOptions(3);
     if (options.length === 0) return;
 
     state.paused = true;
     state.pauseReason = 'perk';
+    notifyPlatformGameplayStop();
     state.keys = {};
 
     if (ui.perkTitle) {
@@ -6193,7 +6701,21 @@ function showPerkDraft() {
         ui.perkOptions.appendChild(button);
     });
 
+    const allowRewardedReroll = !state.ads.perkRerollUsed && canRequestRewardedAd('perk_reroll');
+    if (allowRewardedReroll) {
+        const rerollButton = document.createElement('button');
+        rerollButton.type = 'button';
+        rerollButton.className = 'perk-card rewarded';
+        rerollButton.innerHTML = `
+            <span class="perk-name">R. Rewarded Reroll</span>
+            <span class="perk-desc">Watch a rewarded ad to reroll all augment choices once.</span>
+        `;
+        rerollButton.addEventListener('click', claimPerkRerollReward);
+        ui.perkOptions.appendChild(rerollButton);
+    }
+
     ui.perkScreen.classList.remove('hidden');
+    updateRewardedOfferUI();
     updateHUD();
 }
 
@@ -6202,6 +6724,7 @@ function showDawnDecision() {
 
     state.paused = true;
     state.pauseReason = 'perk';
+    notifyPlatformGameplayStop();
     state.keys = {};
 
     if (ui.perkTitle) {
@@ -6254,10 +6777,12 @@ function showDawnDecision() {
     });
 
     ui.perkScreen.classList.remove('hidden');
+    updateRewardedOfferUI();
     updateHUD();
 }
 
 function endGame(reason = 'The forest consumed your spark.', opts = {}) {
+    notifyPlatformGameplayStop();
     if (state.multiplayer.authoritative.active) {
         endAuthoritativeSession(reason || 'Authoritative session ended.');
     }
@@ -6308,6 +6833,10 @@ function endGame(reason = 'The forest consumed your spark.', opts = {}) {
         pushFeed(`New daily best: ${dailyResult.score}.`, 'warn');
     }
 
+    state.ads.gameOverBasePayout = Math.max(0, Math.floor(payout));
+    state.ads.gameOverBonus = 0;
+    state.ads.gameOverRewardClaimed = false;
+
     const profile = normalizeProfile(state.profile);
     profile.totalRuns += 1;
     profile.bestDay = Math.max(profile.bestDay, survivedDays);
@@ -6337,12 +6866,8 @@ function endGame(reason = 'The forest consumed your spark.', opts = {}) {
     if (ui.perkScreen) ui.perkScreen.classList.add('hidden');
     if (ui.craftingScreen) ui.craftingScreen.classList.add('hidden');
 
-    const title = document.getElementById('game-over-title');
-    const message = document.getElementById('game-over-message');
-    const earned = document.getElementById('earned-embers');
-
-    if (title) title.textContent = opts.title || 'EXTINGUISHED';
-    if (message) {
+    if (ui.gameOverTitle) ui.gameOverTitle.textContent = opts.title || 'EXTINGUISHED';
+    if (ui.gameOverMessage) {
         let messageText = opts.message || `${reason} Survived ${survivedDays} day(s), score ${Math.floor(state.score)}, augments ${state.runPerks.length}.`;
         messageText += ` Best chain ${state.chain.best}, overdrive activations ${state.overdrive.activations}.`;
         messageText += ` Night events: ${state.nightEvent.completedCount} clear / ${state.nightEvent.failedCount} failed.`;
@@ -6350,15 +6875,16 @@ function endGame(reason = 'The forest consumed your spark.', opts = {}) {
             messageText += ` Daily score ${dailyResult.score}.`;
             if (dailyResult.isBest) messageText += ' New personal best.';
         }
-        message.textContent = messageText;
+        ui.gameOverMessage.textContent = messageText;
     }
-    if (earned) earned.textContent = String(payout);
+    if (ui.gameOverEarned) ui.gameOverEarned.textContent = String(payout);
 
     const feedText = opts.feedText || (opts.title === 'EXTRACTED'
         ? 'Run extracted. Refit and redeploy.'
         : 'Run ended. Upgrade and try a tougher route.');
     pushFeed(feedText, opts.feedKind || (opts.title === 'EXTRACTED' ? 'info' : 'danger'));
     state.activeChallengeId = '';
+    updateRewardedOfferUI();
     updateHUD();
 }
 
@@ -8602,7 +9128,10 @@ function updateWorldInteractables(dt) {
         for (let i = 0; i < portals.length; i++) {
             const portal = portals[i];
             portal.arch.rotation.z += dt * (portal.id === 'solo' ? 0.9 : -0.9);
-            portal.glow.intensity = 0.9 + Math.sin(world.time * 3 + portal.pulseOffset) * 0.32;
+            const alliesLocked = portal.id === 'allies' && !isMultiplayerEnabled();
+            const baseIntensity = alliesLocked ? 0.28 : 0.9;
+            const amp = alliesLocked ? 0.08 : 0.32;
+            portal.glow.intensity = baseIntensity + Math.sin(world.time * 3 + portal.pulseOffset) * amp;
         }
     }
 
@@ -8677,12 +9206,7 @@ function interact() {
         const portal = getNearbyDeployPortal();
         if (portal) {
             if (portal.id === 'allies') {
-                if (!state.multiplayer.inRoom || !state.multiplayer.connected) {
-                    openMultiplayerScreen();
-                    pushFeed('Join or create a multiplayer room first.', 'warn');
-                    return;
-                }
-                requestNetworkRunStart();
+                notifyMultiplayerDisabled();
             } else {
                 beginForestRun('solo');
             }
@@ -8752,15 +9276,11 @@ function updateInteractionPrompt() {
     if (state.phase === 'DEPLOY') {
         const portal = getNearbyDeployPortal();
         if (!portal) {
-            ui.interactionText.textContent = 'CHOOSE PORTAL OR PRESS 1/2';
-        } else if (portal.id === 'allies' && (!state.multiplayer.inRoom || !state.multiplayer.connected)) {
-            ui.interactionText.textContent = 'JOIN ROOM FOR WITH OTHERS (M)';
-        } else if (portal.id === 'allies' && !isMultiplayerHost()) {
-            ui.interactionText.textContent = 'WAIT FOR HOST TO LAUNCH';
+            ui.interactionText.textContent = 'CHOOSE SOLO PORTAL OR PRESS 1';
+        } else if (portal.id === 'allies') {
+            ui.interactionText.textContent = 'WITH OTHERS: COMING SOON';
         } else {
-            ui.interactionText.textContent = portal.id === 'allies'
-                ? 'E: LAUNCH WITH OTHERS (HOST)'
-                : 'E: ENTER SOLO (1)';
+            ui.interactionText.textContent = 'E: ENTER SOLO (1)';
         }
         ui.interactionPrompt.classList.remove('hidden');
         return;
@@ -8868,7 +9388,9 @@ function drawRadar() {
 
     if (state.entities.deployHub && state.entities.deployHub.portals) {
         state.entities.deployHub.portals.forEach((portal) => {
-            plot(portal.x, portal.z, portal.id === 'solo' ? '#82ddff' : '#ffbe82', 2.8);
+            const alliesLocked = portal.id === 'allies' && !isMultiplayerEnabled();
+            const color = portal.id === 'solo' ? '#82ddff' : (alliesLocked ? '#7b8692' : '#ffbe82');
+            plot(portal.x, portal.z, color, 2.8);
         });
     }
 
@@ -9129,12 +9651,7 @@ function updateHUD() {
             }
             ui.objectiveText.textContent = `${modePrefix}Ignite beacons (${state.beaconsLit}/${CONFIG.BEACON_COUNT}). Fire ${firePct}% | Threat ${threatPct}%${assistLabel}${weatherCtl}${nemesisText}${orbText}${driveText}${eventText}.`;
         } else if (state.phase === 'DEPLOY') {
-            if (state.multiplayer.inRoom) {
-                const role = isMultiplayerHost() ? 'Host' : 'Member';
-                ui.objectiveText.textContent = `Deployment Nexus: room ${state.multiplayer.roomCode} (${role}). Enter Solo Rift or launch With Others.`;
-            } else {
-                ui.objectiveText.textContent = 'Deployment Nexus: choose Solo Rift or With Others Rift.';
-            }
+            ui.objectiveText.textContent = 'Deployment Nexus: choose Solo Rift. Multiplayer is coming soon.';
         } else if (state.phase === 'GAME_OVER') {
             ui.objectiveText.textContent = 'Run ended. Upgrade and deploy again.';
         } else {
@@ -9154,9 +9671,7 @@ function updateHUD() {
         } else if (state.phase === 'SURVIVE' && !event.resolved) {
             ui.contractText.textContent = `Night event inbound: ${Math.max(0, Math.ceil(event.triggerTimer))}s`;
         } else if (state.phase === 'DEPLOY') {
-            ui.contractText.textContent = state.multiplayer.inRoom
-                ? `Room ${state.multiplayer.roomCode} • ${isMultiplayerHost() ? 'Host ready' : 'Awaiting host launch'}`
-                : 'Portal selection pending';
+            ui.contractText.textContent = 'Solo deployment ready • Multiplayer coming soon';
         } else {
             const c = state.currentContract;
             if (!c) {
@@ -9310,6 +9825,12 @@ function loadProgress() {
         ? parsed.telemetryHistory.slice(0, CONFIG.TELEMETRY_HISTORY_LIMIT)
         : [];
     state.telemetry.session = null;
+    state.ads.busy = false;
+    state.ads.lastRewardedAt = 0;
+    state.ads.perkRerollUsed = false;
+    state.ads.gameOverBasePayout = 0;
+    state.ads.gameOverBonus = 0;
+    state.ads.gameOverRewardClaimed = false;
 
     if (parsed) {
         state.embers = Number(parsed.embers) || 0;
@@ -9358,10 +9879,20 @@ function loadProgress() {
                 state.gadgets[recipe.id] = !!parsed.gadgets[recipe.id];
             });
         }
+
+        const adSave = parsed.ads && typeof parsed.ads === 'object' ? parsed.ads : {};
+        state.ads.dailyDate = typeof adSave.dailyDate === 'string' ? adSave.dailyDate : getTodayDateId();
+        state.ads.dailyViews = Math.max(0, Math.floor(Number(adSave.dailyViews) || 0));
+        state.ads.startBonusClaims = Math.max(0, Math.floor(Number(adSave.startBonusClaims) || 0));
     } else {
         state.challengeHistory = {};
         state.nemesisProfile = normalizeNemesisProfile(null);
+        state.ads.dailyDate = getTodayDateId();
+        state.ads.dailyViews = 0;
+        state.ads.startBonusClaims = 0;
     }
+
+    ensureRewardedDailyState();
 
     ensureStarterRelic();
     if (state.equippedRelics.length === 0 && state.inventory.relics.length > 0) {
@@ -9373,6 +9904,7 @@ function loadProgress() {
     applySkin(state.equippedSkin);
     applySettingsRuntime({ save: false });
     syncSettingsUI();
+    updateRewardedOfferUI();
 }
 
 function saveProgress() {
@@ -9387,6 +9919,11 @@ function saveProgress() {
         guideSeen: !!state.guideSeen,
         settings: normalizeSettings(state.settings),
         gadgets: { ...state.gadgets },
+        ads: {
+            dailyDate: state.ads.dailyDate,
+            dailyViews: Math.max(0, Math.floor(state.ads.dailyViews)),
+            startBonusClaims: Math.max(0, Math.floor(state.ads.startBonusClaims))
+        },
         telemetryHistory: Array.isArray(state.telemetry.history)
             ? state.telemetry.history.slice(0, CONFIG.TELEMETRY_HISTORY_LIMIT)
             : [],
