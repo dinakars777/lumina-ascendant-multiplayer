@@ -6391,9 +6391,9 @@ function beginForestRun(partyMode = state.partyMode, options = {}) {
     if (isRealMultiplayerSession()) {
         pushFeed(`Multiplayer squad online (${state.multiplayer.players.length} players).`, 'info');
     } else if (state.partyMode === 'allies') {
-        pushFeed('Allied sentinels linked. Entering shared deployment.', 'info');
+        pushFeed('Allied sentinels linked. Shared run started.', 'info');
     } else {
-        pushFeed('Solo deployment confirmed.', 'info');
+        pushFeed('Solo run started.', 'info');
     }
     if (state.runAssist.startWoodBonus > 0 || state.runAssist.startShardBonus > 0) {
         pushFeed(`Recovery boost active: +${state.runAssist.startWoodBonus} wood, +${state.runAssist.startShardBonus} shards.`, 'info');
@@ -6408,7 +6408,7 @@ function startGame() {
     state.ads.gameOverBonus = 0;
     state.ads.gameOverRewardClaimed = false;
     updateRewardedOfferUI();
-    enterDeploymentHub();
+    beginForestRun('solo');
 }
 
 function gameTick() {
